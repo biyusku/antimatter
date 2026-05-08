@@ -31,6 +31,7 @@ export const useSimStore = create((set) => ({
   // Visual / control state required by the task spec
   particles: [],
   stats: { annihilations: 0, energy: 0, particleCount: 0, step: 0 },
+  energyHistory: [],
   speed: 1.0,
   selectedScenario: DEFAULT_CONFIG.simulation_type,
 
@@ -38,6 +39,8 @@ export const useSimStore = create((set) => ({
 
   setParticles: (particles) => set({ particles }),
   updateStats: (stats) => set((s) => ({ stats: { ...s.stats, ...stats } })),
+  appendEnergyPoint: (point) =>
+    set((s) => ({ energyHistory: [...s.energyHistory.slice(-199), point] })),
   toggleRunning: () => set((s) => ({ isRunning: !s.isRunning })),
   setSpeed: (speed) => set({ speed }),
   setScenario: (selectedScenario) =>
@@ -65,6 +68,7 @@ export const useSimStore = create((set) => ({
         totalEnergyMev: 0,
         energyKilotons: 0,
         progressPercent: 0,
+        energyHistory: [],
       };
     }),
 
@@ -111,5 +115,6 @@ export const useSimStore = create((set) => ({
       totalEnergyMev: 0,
       energyKilotons: 0,
       progressPercent: 0,
+      energyHistory: [],
     }),
 }));

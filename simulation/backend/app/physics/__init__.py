@@ -13,7 +13,7 @@ Public API:
 from .simulation_engine import SimulationEngine
 from .particles import Particle, AntiParticle
 from .fields import ElectromagneticField
-from .annihilation import detect_annihilation, calculate_energy
+from .annihilation import detect_annihilation, calculate_energy, produce_photons
 
 __all__ = [
     "SimulationEngine",
@@ -22,4 +22,5 @@ __all__ = [
     "ElectromagneticField",
     "detect_annihilation",
     "calculate_energy",
+    "produce_photons",
 ]

@@ -9,8 +9,9 @@ from app.physics import SimulationEngine
 
 logger = logging.getLogger(__name__)
 
-BROADCAST_INTERVAL = 0.05  # 50ms
-DT = 1e-9  # physics time step (seconds)
+BROADCAST_INTERVAL = 0.05  # 50ms — UI update rate
+DT = 1e-7             # physics time step (seconds)
+STEPS_PER_FRAME = 20  # physics steps computed per broadcast tick
 
 
 async def simulation_ws(websocket: WebSocket) -> None:
@@ -56,6 +57,8 @@ async def simulation_ws(websocket: WebSocket) -> None:
             if engine is None:
                 continue
 
+            for _ in range(STEPS_PER_FRAME - 1):
+                engine.step(dt=DT)
             snapshot = engine.step(dt=DT)
 
             stats = snapshot["stats"]

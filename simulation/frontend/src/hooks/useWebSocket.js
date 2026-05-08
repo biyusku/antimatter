@@ -9,11 +9,14 @@ const MEV_TO_JOULES = 1.602176634e-13;
 
 export function useWebSocket() {
   const ws = useRef(null);
+  const frameRef = useRef(0); // monotonic frame counter for chart x-axis
   const {
     updateStats,
+    appendEnergyPoint,
     completeSimulation,
     setWsConnected,
     setParticles,
+    isRunning,
     config,
   } = useSimStore();
 
@@ -23,7 +26,15 @@ export function useWebSocket() {
     const s = new WebSocket(WS_BASE + "/ws/simulate");
     ws.current = s;
 
-    s.onopen = () => setWsConnected(true);
+    s.onopen = () => {
+      setWsConnected(true);
+      // Auto-start if simulation was already running (e.g. reconnect)
+      if (useSimStore.getState().isRunning) {
+        const scenario =
+          useSimStore.getState().config?.scenario ?? "electron_positron";
+        s.send(JSON.stringify({ action: "start", scenario }));
+      }
+    };
     s.onclose = () => {
       setWsConnected(false);
       setTimeout(connect, 3000);
@@ -34,11 +45,20 @@ export function useWebSocket() {
         const m = JSON.parse(e.data);
         if (m.particles !== undefined) {
           setParticles(m.particles);
+          const energyMev = (m.stats?.totalEnergy ?? 0) / MEV_TO_JOULES;
+          const frame = ++frameRef.current;
           updateStats({
             annihilations: m.stats?.annihilationCount ?? 0,
-            energy: (m.stats?.totalEnergy ?? 0) / MEV_TO_JOULES,
+            energy: energyMev,
             particleCount: m.stats?.particleCount ?? 0,
-            step: m.stats?.step ?? 0,
+            step: m.stats?.step ?? frame,
+            matterCount: m.stats?.matterCount ?? 0,
+            antimatterCount: m.stats?.antimatterCount ?? 0,
+          });
+          appendEnergyPoint({
+            step: frame,
+            energy: +energyMev.toFixed(4),
+            annihilations: m.stats?.annihilationCount ?? 0,
           });
         } else if (m.type === "simulation_complete") {
           completeSimulation();
@@ -47,9 +67,16 @@ export function useWebSocket() {
         console.error("WS parse error:", err);
       }
     };
-  }, [updateStats, completeSimulation, setWsConnected, setParticles]);
+  }, [
+    updateStats,
+    appendEnergyPoint,
+    completeSimulation,
+    setWsConnected,
+    setParticles,
+  ]);
 
   const startSim = useCallback(() => {
+    frameRef.current = 0;
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(
         JSON.stringify({
@@ -67,6 +94,7 @@ export function useWebSocket() {
   }, []);
 
   const resetSim = useCallback(() => {
+    frameRef.current = 0;
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ action: "reset" }));
     }

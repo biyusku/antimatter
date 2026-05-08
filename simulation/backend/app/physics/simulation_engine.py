@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from .particles import Particle, AntiParticle
-from .annihilation import detect_annihilation, calculate_energy, annihilation_products
+from .annihilation import detect_annihilation, calculate_energy, produce_photons
 from .fields import ElectromagneticField
 from .constants import ELECTRON_MASS, PROTON_MASS, E_CHARGE
 
@@ -104,7 +104,7 @@ class SimulationEngine:
         self._annihilation_count: int = 0
         self._total_energy_joules: float = 0.0
         self._step_count: int = 0
-        self._threshold: float = 0.3
+        self._total_photons: int = 0
         self._init_scenario(scenario)
 
     # ------------------------------------------------------------------
@@ -148,13 +148,14 @@ class SimulationEngine:
             for ap in antimatter:
                 if ap.id in dead_a:
                     continue
-                if detect_annihilation(mp, ap, self._threshold):
+                if detect_annihilation(mp, ap, dt=dt):
                     dead_m.add(mp.id)
                     dead_a.add(ap.id)
-                    products = annihilation_products(mp, ap)
+                    products = produce_photons(mp, ap)
                     energy = calculate_energy(mp.mass)
                     self._annihilation_count += 1
                     self._total_energy_joules += energy["energy_joules"]
+                    self._total_photons += products["photon_count"]
                     annihilation_events.append({**products, **energy})
                     break
 
@@ -185,6 +186,7 @@ class SimulationEngine:
                 "particle_count": len(self._particles),
                 "matter_count": sum(1 for p in self._particles if not p.is_antimatter),
                 "antimatter_count": sum(1 for p in self._particles if p.is_antimatter),
+                "photon_count": self._total_photons,
                 "step": self._step_count,
             },
             "timestamp": time.time(),
@@ -197,6 +199,7 @@ class SimulationEngine:
         """Reset simulation to initial conditions for the current scenario."""
         self._annihilation_count = 0
         self._total_energy_joules = 0.0
+        self._total_photons = 0
         self._step_count = 0
         self._particles = []
         self._init_scenario(self._scenario)

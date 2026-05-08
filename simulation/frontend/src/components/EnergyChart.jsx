@@ -17,7 +17,7 @@ function CustomTooltip({ active, payload, label }) {
       <div className="text-gray-400 mb-1">Step {label}</div>
       {payload.map((p) => (
         <div key={p.dataKey} style={{ color: p.color }}>
-          {p.name}: {typeof p.value === "number" ? p.value.toFixed(2) : p.value}
+          {p.name}: {typeof p.value === "number" ? p.value.toFixed(4) : p.value}
         </div>
       ))}
     </div>
@@ -25,9 +25,9 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 export default function EnergyChart() {
-  const { steps } = useSimStore();
+  const energyHistory = useSimStore((s) => s.energyHistory);
 
-  if (steps.length < 2) {
+  if (energyHistory.length < 2) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-2">
         <span className="text-gray-400 font-mono text-xs uppercase tracking-wider">
@@ -40,13 +40,6 @@ export default function EnergyChart() {
     );
   }
 
-  const data = steps.map((s, i) => ({
-    step: s.step ?? i,
-    energyMev: +(s.total_energy_released_mev ?? 0).toFixed(2),
-    annihilations: s.annihilations ?? 0,
-    photons: s.photons_produced ?? 0,
-  }));
-
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-3">
       <span className="text-gray-400 font-mono text-xs uppercase tracking-wider">
@@ -55,7 +48,7 @@ export default function EnergyChart() {
 
       <ResponsiveContainer width="100%" height={180}>
         <LineChart
-          data={data}
+          data={energyHistory}
           margin={{ top: 4, right: 8, left: -10, bottom: 0 }}
         >
           <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -81,7 +74,7 @@ export default function EnergyChart() {
           />
           <Line
             type="monotone"
-            dataKey="energyMev"
+            dataKey="energy"
             name="Energy (MeV)"
             stroke="#00f5ff"
             dot={false}
@@ -93,31 +86,6 @@ export default function EnergyChart() {
             dataKey="annihilations"
             name="Annihilations"
             stroke="#ff4d6d"
-            dot={false}
-            strokeWidth={1.5}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
-
-      <ResponsiveContainer width="100%" height={120}>
-        <LineChart
-          data={data}
-          margin={{ top: 4, right: 8, left: -10, bottom: 0 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-          <XAxis
-            dataKey="step"
-            stroke="#374151"
-            tick={{ fill: "#6b7280", fontSize: 10 }}
-          />
-          <YAxis stroke="#374151" tick={{ fill: "#6b7280", fontSize: 10 }} />
-          <Tooltip content={<CustomTooltip />} />
-          <Line
-            type="monotone"
-            dataKey="photons"
-            name="Photons"
-            stroke="#fbbf24"
             dot={false}
             strokeWidth={1.5}
             isAnimationActive={false}
