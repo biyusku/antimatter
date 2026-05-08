@@ -66,6 +66,9 @@ async def simulation_ws(websocket: WebSocket) -> None:
                         "annihilationCount": stats["annihilation_count"],
                         "totalEnergy": stats["total_energy"],
                         "particleCount": stats["particle_count"],
+                        "matterCount": stats.get("matter_count", 0),
+                        "antimatterCount": stats.get("antimatter_count", 0),
+                        "step": stats.get("step", 0),
                     },
                     "timestamp": snapshot["timestamp"],
                 })

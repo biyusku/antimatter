@@ -30,7 +30,7 @@ export const useSimStore = create((set) => ({
 
   // Visual / control state required by the task spec
   particles: [],
-  stats: {},
+  stats: { annihilations: 0, energy: 0, particleCount: 0, step: 0 },
   speed: 1.0,
   selectedScenario: DEFAULT_CONFIG.simulation_type,
 

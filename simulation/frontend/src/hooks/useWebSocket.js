@@ -1,19 +1,26 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useSimStore } from "../store/simulationStore";
 
-const WS_URL =
-  (typeof import.meta !== "undefined" && import.meta.env?.VITE_WS_URL) ||
-  "ws://localhost:8000";
+const WS_BASE =
+  import.meta.env?.VITE_WS_URL ||
+  `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
+
+const MEV_TO_JOULES = 1.602176634e-13;
 
 export function useWebSocket() {
   const ws = useRef(null);
-  const { updateStep, completeSimulation, setWsConnected, config } =
-    useSimStore();
+  const {
+    updateStats,
+    completeSimulation,
+    setWsConnected,
+    setParticles,
+    config,
+  } = useSimStore();
 
   const connect = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) return;
 
-    const s = new WebSocket(WS_URL + "/ws/simulation");
+    const s = new WebSocket(WS_BASE + "/ws/simulate");
     ws.current = s;
 
     s.onopen = () => setWsConnected(true);
@@ -25,43 +32,55 @@ export function useWebSocket() {
     s.onmessage = (e) => {
       try {
         const m = JSON.parse(e.data);
-        if (m.type === "simulation_step") updateStep(m.data);
-        else if (m.type === "simulation_complete") completeSimulation();
+        if (m.particles !== undefined) {
+          setParticles(m.particles);
+          updateStats({
+            annihilations: m.stats?.annihilationCount ?? 0,
+            energy: (m.stats?.totalEnergy ?? 0) / MEV_TO_JOULES,
+            particleCount: m.stats?.particleCount ?? 0,
+            step: m.stats?.step ?? 0,
+          });
+        } else if (m.type === "simulation_complete") {
+          completeSimulation();
+        }
       } catch (err) {
         console.error("WS parse error:", err);
       }
     };
-  }, [updateStep, completeSimulation, setWsConnected]);
+  }, [updateStats, completeSimulation, setWsConnected, setParticles]);
 
   const startSim = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(
-        JSON.stringify({ type: "start_simulation", params: config }),
+        JSON.stringify({
+          action: "start",
+          scenario: config?.scenario ?? "electron_positron",
+        }),
       );
     }
   }, [config]);
 
   const stopSim = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: "stop_simulation" }));
+      ws.current.send(JSON.stringify({ action: "stop" }));
     }
   }, []);
 
   const resetSim = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: "reset_simulation" }));
+      ws.current.send(JSON.stringify({ action: "reset" }));
     }
   }, []);
 
   const setScenario = useCallback((scenario) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: "set_scenario", scenario }));
+      ws.current.send(JSON.stringify({ action: "setScenario", scenario }));
     }
   }, []);
 
-  const sendControl = useCallback((type, payload = {}) => {
+  const sendControl = useCallback((action, payload = {}) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type, ...payload }));
+      ws.current.send(JSON.stringify({ action, ...payload }));
     }
   }, []);
 
