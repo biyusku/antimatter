@@ -1,57 +1,97 @@
+import asyncio
 import json
 import logging
+from typing import Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from app.physics.engine import SimulationRunner
+from app.physics import SimulationEngine
 
 logger = logging.getLogger(__name__)
+
+BROADCAST_INTERVAL = 0.05  # 50ms
+DT = 1e-9  # physics time step (seconds)
 
 
 async def simulation_ws(websocket: WebSocket) -> None:
     await websocket.accept()
-    runner: SimulationRunner | None = None
 
-    try:
+    engine: Optional[SimulationEngine] = None
+    running: bool = False
+
+    # Mutable containers so inner coroutines can rebind them
+    state: dict = {"engine": None, "running": False}
+
+    async def receive_loop() -> None:
         while True:
             raw = await websocket.receive_text()
-            msg = json.loads(raw)
+            msg: dict = json.loads(raw)
+            action = msg.get("action", "")
 
-            if msg.get("type") == "start_simulation":
-                params = msg.get("params", {})
-                runner = SimulationRunner(params)
-                await websocket.send_text(
-                    json.dumps({"type": "simulation_started", "params": params})
-                )
+            if action == "start":
+                scenario = msg.get("scenario", "electron_positron")
+                if state["engine"] is None:
+                    state["engine"] = SimulationEngine(scenario)
+                state["running"] = True
 
-                while runner.running and runner.step < runner.total_steps:
-                    result = runner.run_batch(batch_size=500)
-                    await websocket.send_text(
-                        json.dumps({"type": "simulation_update", "data": result})
-                    )
-                    if result["complete"]:
-                        break
+            elif action == "stop":
+                state["running"] = False
 
-                await websocket.send_text(
-                    json.dumps({
-                        "type": "simulation_complete",
-                        "data": {
-                            "total_annihilations": runner.annihilations,
-                            "total_energy_mev": runner.total_energy_mev,
-                            "photons_produced": runner.photons,
-                        },
-                    })
-                )
+            elif action == "reset":
+                state["running"] = False
+                if state["engine"] is not None:
+                    state["engine"].reset()
 
-            elif msg.get("type") == "stop_simulation":
-                if runner:
-                    runner.running = False
-                await websocket.send_text(json.dumps({"type": "simulation_stopped"}))
+            elif action == "setScenario":
+                scenario = msg.get("scenario", "electron_positron")
+                state["running"] = False
+                state["engine"] = SimulationEngine(scenario)
 
-    except WebSocketDisconnect:
-        if runner:
-            runner.running = False
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        if runner:
-            runner.running = False
+    async def broadcast_loop() -> None:
+        while True:
+            await asyncio.sleep(BROADCAST_INTERVAL)
+            if not state["running"]:
+                continue
+            engine: Optional[SimulationEngine] = state["engine"]
+            if engine is None:
+                continue
+
+            snapshot = engine.step(dt=DT)
+
+            stats = snapshot["stats"]
+            await websocket.send_text(
+                json.dumps({
+                    "particles": snapshot["particles"],
+                    "stats": {
+                        "annihilationCount": stats["annihilation_count"],
+                        "totalEnergy": stats["total_energy"],
+                        "particleCount": stats["particle_count"],
+                    },
+                    "timestamp": snapshot["timestamp"],
+                })
+            )
+
+    receive_task = asyncio.create_task(receive_loop())
+    broadcast_task = asyncio.create_task(broadcast_loop())
+
+    try:
+        done, pending = await asyncio.wait(
+            {receive_task, broadcast_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        for task in done:
+            exc = task.exception()
+            if exc and not isinstance(exc, WebSocketDisconnect):
+                logger.error("WebSocket task error: %s", exc)
+    finally:
+        state["running"] = False
+        if not receive_task.done():
+            receive_task.cancel()
+        if not broadcast_task.done():
+            broadcast_task.cancel()

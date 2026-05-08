@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes.physics import router as physics_router
 from app.api.routes.simulation import router as sim_router
 from app.api.websocket import simulation_ws
+from app.auth.github import router as auth_router
 from app.config import settings
 from app.db.database import init_db
 
@@ -40,6 +41,7 @@ app.add_middleware(
 
 app.include_router(physics_router)
 app.include_router(sim_router)
+app.include_router(auth_router)
 
 
 @app.websocket("/ws/simulate")

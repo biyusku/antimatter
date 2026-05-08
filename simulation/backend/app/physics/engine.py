@@ -1,9 +1,8 @@
 """
-Monte Carlo annihilation simulation engine.
+Monte Carlo annihilation simulation engine + PhysicsEngine utility class.
 
-Supports electron-positron and proton-antiproton annihilation.
-Designed to be called in batches from a WebSocket handler so
-progress can be streamed to the frontend in real time.
+SimulationRunner: batched Monte Carlo for WebSocket streaming.
+PhysicsEngine: stateless calculations (annihilation energy, cross-sections).
 """
 
 import math
@@ -11,12 +10,107 @@ from typing import Any
 
 import numpy as np
 
-MEV_TO_J = 1.602176634e-13
-TNT_KT = 4.184e12
-ELECTRON_MASS_MEV = 0.51099895
-PROTON_MASS_MEV = 938.27208816
-R_E = 2.8179403227e-15  # classical electron radius, metres
+from .constants import (
+    ELECTRON_MASS_MEV,
+    LITTLE_BOY_YIELD_KT,
+    MEV_TO_JOULES,
+    PROTON_MASS_MEV,
+    R_E,
+    TNT_JOULES_PER_KILOTON,
+    TNT_JOULES_PER_MEGATON,
+    TSAR_BOMBA_YIELD_MT,
+    C_SQUARED,
+)
 
+
+# ---------------------------------------------------------------------------
+# PhysicsEngine — stateless, reusable calculations
+# ---------------------------------------------------------------------------
+
+class PhysicsEngine:
+    """Stateless physics calculation engine. Instantiated once as a singleton."""
+
+    # --- Energy calculations -----------------------------------------------
+
+    def annihilation_energy(
+        self,
+        matter_kg: float,
+        antimatter_kg: float | None = None,
+    ) -> dict:
+        """
+        Calculate energy released by complete matter-antimatter annihilation.
+
+        Args:
+            matter_kg: mass of matter in kilograms
+            antimatter_kg: mass of antimatter in kilograms (defaults to matter_kg)
+
+        Returns:
+            dict with energy_joules, energy_kilotons_tnt, hiroshima_multiples,
+            efficiency_percent, and supporting values.
+        """
+        if antimatter_kg is None:
+            antimatter_kg = matter_kg
+
+        total_mass_kg = matter_kg + antimatter_kg
+        # ~99.9% efficiency: ~0.1% lost to neutrinos in p+p̄ channel
+        energy_j = total_mass_kg * C_SQUARED * 0.999
+        energy_kt = energy_j / TNT_JOULES_PER_KILOTON
+        energy_mt = energy_j / TNT_JOULES_PER_MEGATON
+        energy_mev = energy_j / MEV_TO_JOULES
+
+        return {
+            "matter_kg": matter_kg,
+            "antimatter_kg": antimatter_kg,
+            "total_mass_kg": total_mass_kg,
+            "energy_joules": energy_j,
+            "energy_mev": energy_mev,
+            "energy_kilotons_tnt": energy_kt,
+            "energy_megatons_tnt": energy_mt,
+            "efficiency_percent": 99.9,
+            "hiroshima_multiples": energy_kt / LITTLE_BOY_YIELD_KT,
+            "tsar_bomba_fraction": energy_mt / TSAR_BOMBA_YIELD_MT,
+        }
+
+    # --- Cross-section calculations ----------------------------------------
+
+    def klein_nishina_cross_section(self, energy_mev: float) -> float:
+        """
+        Klein-Nishina total cross-section for Compton scattering / e+e- annihilation.
+
+        Uses the exact analytic formula (Heitler 1954):
+            sigma = 2*pi*r_e^2 * { [(1+eps)/eps^2] * [2(1+eps)/(1+2eps) - ln(1+2eps)/eps]
+                                   + ln(1+2eps)/(2eps) - (1+3eps)/(1+2eps)^2 }
+
+        Args:
+            energy_mev: photon / centre-of-mass energy in MeV
+
+        Returns:
+            Cross-section in cm^2
+        """
+        epsilon = energy_mev / ELECTRON_MASS_MEV
+
+        if epsilon < 1e-6:
+            # Thomson limit: sigma_T = (8/3) * pi * r_e^2
+            return (8.0 / 3.0) * math.pi * R_E ** 2 * 1e4  # m^2 -> cm^2
+
+        ln2e = math.log(1.0 + 2.0 * epsilon)
+        term1 = (1.0 + epsilon) / epsilon ** 2 * (
+            2.0 * (1.0 + epsilon) / (1.0 + 2.0 * epsilon) - ln2e / epsilon
+        )
+        term2 = ln2e / (2.0 * epsilon)
+        term3 = (1.0 + 3.0 * epsilon) / (1.0 + 2.0 * epsilon) ** 2
+
+        cs_m2 = 2.0 * math.pi * R_E ** 2 * (term1 + term2 - term3)
+        return abs(cs_m2) * 1e4  # m^2 -> cm^2
+
+
+# Singleton — import this everywhere instead of re-instantiating
+physics_engine = PhysicsEngine()
+
+
+# ---------------------------------------------------------------------------
+# SimulationRunner — stateful Monte Carlo for WebSocket streaming
+# ---------------------------------------------------------------------------
 
 class SimulationRunner:
     def __init__(self, params: dict[str, Any]) -> None:
@@ -34,40 +128,16 @@ class SimulationRunner:
         self.events: list[dict] = []
 
     # ------------------------------------------------------------------
-    # Cross-section helpers
-    # ------------------------------------------------------------------
-
-    def klein_nishina_cs(self, energy_mev: float) -> float:
-        """Approximate Klein-Nishina total cross-section (cm²)."""
-        epsilon = energy_mev / ELECTRON_MASS_MEV
-        if epsilon < 1e-6:
-            return (8 / 3) * math.pi * R_E ** 2 * 1e4  # Thomson limit, cm²
-        ln_term = math.log(1 + 2 * epsilon)
-        cs = (
-            2
-            * math.pi
-            * R_E ** 2
-            * (
-                (1 + epsilon) / epsilon ** 2
-                * (2 * (1 + epsilon) / (1 + 2 * epsilon) - ln_term / epsilon)
-                + ln_term / (2 * epsilon)
-                - (1 + 3 * epsilon) / (1 + 2 * epsilon) ** 2
-            )
-        )
-        return abs(cs) * 1e4  # m² → cm²
-
-    # ------------------------------------------------------------------
     # Single-event samplers
     # ------------------------------------------------------------------
 
     def _sample_ep(self) -> dict:
-        """Sample one e⁺e⁻ annihilation event."""
         pos = self.rng.uniform(-5, 5, 3).tolist()
         theta = float(self.rng.uniform(0, math.pi))
         e_photon = ELECTRON_MASS_MEV + self.beam_energy_mev / 2
         return {
             "type": "annihilation",
-            "process": "e⁺+e⁻→2γ",
+            "process": "e+e-→2γ",
             "photon_count": 2,
             "photon_energy_mev": e_photon,
             "angle_rad": theta,
@@ -76,7 +146,6 @@ class SimulationRunner:
         }
 
     def _sample_pp_bar(self) -> dict:
-        """Sample one p+p̄ annihilation event (average pion multiplicity)."""
         n_pions = int(self.rng.integers(3, 8))
         n_pi0 = max(1, n_pions // 3)
         total_e = 2 * PROTON_MASS_MEV + self.beam_energy_mev
@@ -132,7 +201,7 @@ class SimulationRunner:
         self.step += batch_size
         self.events = batch_events[-20:]
 
-        energy_j = self.total_energy_mev * MEV_TO_J
+        energy_j = self.total_energy_mev * MEV_TO_JOULES
         progress = min(self.step / self.total_steps * 100, 100.0)
 
         return {
@@ -143,7 +212,7 @@ class SimulationRunner:
             "photons_produced": self.photons,
             "total_energy_released_mev": self.total_energy_mev,
             "total_energy_released_joules": energy_j,
-            "energy_kilotons_tnt": energy_j / TNT_KT,
+            "energy_kilotons_tnt": energy_j / TNT_JOULES_PER_KILOTON,
             "particles_remaining": max(0, self.particle_count - self.annihilations),
             "progress_percent": progress,
             "current_events": self.events,

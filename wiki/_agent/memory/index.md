@@ -15,7 +15,7 @@ AI agent memory for the **Anti Madde** Turkish science documentary project. All 
 | #   | Topic                                  | Wiki Note                   | Status       |
 | --- | -------------------------------------- | --------------------------- | ------------ |
 | 1   | Antimatter basics & history            | [[antimatter_history]]      | **Complete** |
-| 2   | Antimatter production (CERN, Fermilab) | [[antimatter-production]]   | Pending      |
+| 2   | Antimatter production (CERN, Fermilab) | [[antimatter_production]]   | **Complete** |
 | 3   | Antimatter detection & storage         | [[antimatter-detection]]    | Pending      |
 | 4   | Medical & future applications          | [[antimatter_applications]] | **Complete** |
 | 5   | Weapons & military research history    | [[antimatter_weapons]]      | **Complete** |
@@ -71,6 +71,51 @@ AI agent memory for the **Anti Madde** Turkish science documentary project. All 
   - `research/03_weapons_military_history.md` — full Area 5 research (weapons & military)
 - Filenames: `kebab-case.md`; frontmatter required on all agent-managed files
 - Internal links: Obsidian wikilinks `[[note-name]]`
+
+---
+
+## Simulation Platform Status
+
+_Updated: 2026-05-08_
+
+Interactive physics simulation built at `E:\Anti Madde\simulation\` to accompany the documentary.
+
+### Backend — `simulation/backend/app/physics/` (814 lines, all compiled ✓)
+
+| File                   | Lines | Description                                                            |
+| ---------------------- | ----- | ---------------------------------------------------------------------- |
+| `__init__.py`          | 24    | Public API exports                                                     |
+| `particles.py`         | 96    | `Particle` / `AntiParticle` dataclasses, relativistic γ, KE            |
+| `annihilation.py`      | 102   | E=mc² energy calc, `detect_annihilation`, gamma ray products           |
+| `fields.py`            | 89    | `ElectromagneticField`, Lorentz force, cyclotron radius                |
+| `simulation_engine.py` | 225   | `SimulationEngine` with scenarios, Boris push integrator               |
+| `engine.py`            | 219   | `SimulationRunner` (Monte Carlo, WebSocket batching) + `PhysicsEngine` |
+| `constants.py`         | 59    | All SI constants, TNT conversions, Klein-Nishina constants             |
+
+Smoke test: e⁺e⁻ annihilation → 1.022 MeV ✓. All `.pyc` files present (imports verified).
+
+### REST API Endpoints (working)
+
+- `POST /api/physics/annihilation` — energy from arbitrary matter+antimatter mass
+- `GET /api/physics/compare` — Little Boy / Tsar Bomba / annihilation side-by-side
+- `GET /api/physics/production-calculator` — CERN-rate cost/time to target mass
+- `GET /api/physics/pet-scanner` — PET physics data
+- `GET /api/simulations/types` — 3 simulation types with formulas
+
+### WebSocket — `/ws/simulate`
+
+Real-time Monte Carlo streaming: `start_simulation` → batched `simulation_update` events → `simulation_complete`. Supports `stop_simulation`.
+
+### Frontend — `simulation/frontend/src/` (React + Vite + Tailwind)
+
+Three-tab UI: **Simulation** (ParticleCanvas + EnergyChart + SimulationControls + SimulationStats), **Comparator**, **Science** (fact cards for PET / antiproton therapy / ALPHA-g / baryon asymmetry).
+
+### What Remains
+
+- Tests — zero written; `pytest` + `pytest-asyncio` are in `requirements.txt`
+- `.env` — copy from `.env.example`; GitHub OAuth Client ID/Secret needed for auth
+- `docker compose up` — full stack not yet smoke-tested end-to-end
+- `antimatter-detection.md` — wiki note still missing (listed as Pending in index)
 
 ---
 
