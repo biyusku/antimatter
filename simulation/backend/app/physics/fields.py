@@ -1,14 +1,17 @@
 """
 Electromagnetic field model for the antimatter simulation.
 
-Uses the non-relativistic Lorentz force law:
-    F = q(E + v × B)
+Uses the relativistic Boris push integrator:
+    - Exact energy conservation for magnetic rotation at all speeds.
+    - Correct relativistic velocity v = p/(γm).
 
 For a 2-D simulation B is treated as a scalar out-of-plane component (Bz),
-and E is a 2-D vector (Ex, Ey).
+and E is a 2-D vector (Ex, Ey). The Boris push is performed in 3-D (pz=0)
+and the z-components are discarded afterward.
 """
 
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -76,13 +79,54 @@ class ElectromagneticField:
         """
         Apply Lorentz force to particle in-place for time step dt.
 
-        Uses Euler integration:  v += (F/m) * dt
+        Uses the Boris push — a relativistic, symplectic integrator that
+        conserves energy exactly for the magnetic rotation step:
+
+          1. Half electric kick:   p⁻ = p + (q/2) E dt
+          2. Magnetic rotation:    p⁺ = rotate(p⁻, t)  where t = qB dt/(2γm)
+          3. Half electric kick:   p_new = p⁺ + (q/2) E dt
+          4. Update position:      x += (p_new / γm) dt
+
+        Works at all speeds; reduces to the classical leapfrog at v ≪ c.
         """
-        Fx, Fy = self.lorentz_force(particle)
-        ax = Fx / particle.mass
-        ay = Fy / particle.mass
-        particle.vx += ax * dt
-        particle.vy += ay * dt
+        C_LIGHT: float = 2.99792458e8   # m/s
+
+        q = particle.charge
+        m = particle.mass
+
+        # Current momentum p = γmv
+        vx, vy = particle.vx, particle.vy
+        v2 = vx * vx + vy * vy
+        gamma = 1.0 / math.sqrt(max(1.0 - v2 / (C_LIGHT * C_LIGHT), 1.0e-10))
+        px = gamma * m * vx
+        py = gamma * m * vy
+
+        # 1. Half electric kick
+        half_qEdt = 0.5 * q * dt
+        px_minus = px + half_qEdt * self.Ex
+        py_minus = py + half_qEdt * self.Ey
+
+        # 2. Magnetic rotation (Boris) — B along z only, so t = (0, 0, tz)
+        p_minus_sq = px_minus * px_minus + py_minus * py_minus
+        gamma_minus = math.sqrt(1.0 + p_minus_sq / (m * m * C_LIGHT * C_LIGHT))
+        tz = (q * self.Bz * dt) / (2.0 * gamma_minus * m)
+        sz = 2.0 * tz / (1.0 + tz * tz)
+        # p' = p⁻ + p⁻ × t   (cross with t=(0,0,tz): px'=px+py*tz, py'=py-px*tz)
+        px_prime = px_minus + py_minus * tz
+        py_prime = py_minus - px_minus * tz
+        # p⁺ = p⁻ + p' × s
+        px_plus = px_minus + py_prime * sz
+        py_plus = py_minus - px_prime * sz
+
+        # 3. Second half electric kick
+        px_new = px_plus + half_qEdt * self.Ex
+        py_new = py_plus + half_qEdt * self.Ey
+
+        # 4. Recover velocity and update position
+        p_new_sq = px_new * px_new + py_new * py_new
+        gamma_new = math.sqrt(1.0 + p_new_sq / (m * m * C_LIGHT * C_LIGHT))
+        particle.vx = px_new / (gamma_new * m)
+        particle.vy = py_new / (gamma_new * m)
         particle.x += particle.vx * dt
         particle.y += particle.vy * dt
 

@@ -99,6 +99,7 @@ class AnnihilationPhoton:
     Energies in MeV.  Momenta in MeV/c.  Positions in simulation units.
     4-momentum uses natural units (c = 1): p = [E, px, py, pz], all in MeV.
     Metric signature: (+, -, -, -).
+    polarization_correlation: cos(ε₁·ε₂) — 0.0 for singlet (perpendicular).
     """
     energy_MeV: float
     momentum_4vec: list           # [E, px, py, pz] in MeV
@@ -106,17 +107,19 @@ class AnnihilationPhoton:
     polarization: list            # unit 3-vector ⊥ to direction
     production_vertex: list       # [x, y, z] in simulation units
     theta_cm: float               # CM-frame polar angle (rad)
-    correlation_type: str = "singlet"   # 'singlet' (S=0) or 'triplet' (S=1)
+    correlation_type: str = "singlet"       # 'singlet' (S=0) or 'triplet' (S=1)
+    polarization_correlation: float = 0.0   # cos(ε₁·ε₂); 0.0 = perpendicular
 
     def to_dict(self) -> dict:
         return {
-            "energy_MeV":        self.energy_MeV,
-            "momentum_4vec":     self.momentum_4vec,
-            "direction":         self.direction,
-            "polarization":      self.polarization,
-            "production_vertex": self.production_vertex,
-            "theta_cm":          self.theta_cm,
-            "correlation_type":  self.correlation_type,
+            "energy_MeV":               self.energy_MeV,
+            "momentum_4vec":            self.momentum_4vec,
+            "direction":                self.direction,
+            "polarization":             self.polarization,
+            "production_vertex":        self.production_vertex,
+            "theta_cm":                 self.theta_cm,
+            "correlation_type":         self.correlation_type,
+            "polarization_correlation": self.polarization_correlation,
         }
 
 
@@ -403,30 +406,37 @@ def generate_photon_pair(
     eps1 = _unit(ref - float(np.dot(ref, dir1)) * dir1,
                  np.array([1.0, 0.0, 0.0]))
 
-    # Singlet: ε₂ = dir2 × ε₁,  normalised → ε₁ · ε₂ = 0
+    # Singlet: ε₂ = dir2 × ε₁, normalised.
+    # Then Gram-Schmidt again to enforce ε₁ · ε₂ = 0 exactly (numerical safety).
     cross = np.cross(dir2, eps1)
     eps2  = _unit(cross, np.cross(dir2, np.array([0.0, 1.0, 0.0])))
+    eps2  = eps2 - float(np.dot(eps2, eps1)) * eps1
+    eps2  = _unit(eps2, np.cross(dir2, np.array([0.0, 1.0, 0.0])))
+
+    cos_pol = float(np.dot(eps1, eps2))   # ≈ 0.0 for singlet
 
     E1_lab = float(p1_lab[0])
     E2_lab = float(p2_lab[0])
 
     ph1 = AnnihilationPhoton(
-        energy_MeV       = E1_lab,
-        momentum_4vec    = p1_lab.tolist(),
-        direction        = dir1.tolist(),
-        polarization     = eps1.tolist(),
-        production_vertex= vertex,
-        theta_cm         = theta_cm,
-        correlation_type = "singlet",
+        energy_MeV              = E1_lab,
+        momentum_4vec           = p1_lab.tolist(),
+        direction               = dir1.tolist(),
+        polarization            = eps1.tolist(),
+        production_vertex       = vertex,
+        theta_cm                = theta_cm,
+        correlation_type        = "singlet",
+        polarization_correlation= cos_pol,
     )
     ph2 = AnnihilationPhoton(
-        energy_MeV       = E2_lab,
-        momentum_4vec    = p2_lab.tolist(),
-        direction        = dir2.tolist(),
-        polarization     = eps2.tolist(),
-        production_vertex= vertex,
-        theta_cm         = math.pi - theta_cm,   # back-to-back
-        correlation_type = "singlet",
+        energy_MeV              = E2_lab,
+        momentum_4vec           = p2_lab.tolist(),
+        direction               = dir2.tolist(),
+        polarization            = eps2.tolist(),
+        production_vertex       = vertex,
+        theta_cm                = math.pi - theta_cm,   # back-to-back
+        correlation_type        = "singlet",
+        polarization_correlation= cos_pol,
     )
     return ph1, ph2
 
@@ -439,26 +449,29 @@ def detect_annihilation(
     p1: "Particle",
     p2: "Particle",
     dt: float,
+    threshold: float = _BOX_HALF,
 ) -> bool:
     """
     Monte Carlo annihilation decision using the Heitler cross-section.
 
-    Replaces the old Dirac NR cross-section with the full relativistic
-    Heitler (1954) formula, keeping the identical Poisson probability model:
+    Only pairs within `threshold` simulation units are eligible; this wires
+    up the per-scenario annihilation_threshold values from SimulationEngine.
 
         P = 1 − exp(−n · σ_Heitler · v_rel · dt)
 
-    The Dirac result is recovered exactly in the NR limit (β → 0).
-
     Args:
-        p1:  matter particle      (is_antimatter=False)
-        p2:  antimatter particle  (is_antimatter=True)
-        dt:  physics time step in seconds
+        p1:        matter particle      (is_antimatter=False)
+        p2:        antimatter particle  (is_antimatter=True)
+        dt:        physics time step in seconds
+        threshold: maximum separation for annihilation (simulation units)
 
     Returns:
         True with probability P (Monte Carlo accept/reject).
     """
     if p1.is_antimatter == p2.is_antimatter:
+        return False
+
+    if _distance_sq(p1, p2) > threshold * threshold:
         return False
 
     v_rel = max(_relative_speed(p1, p2), _V_MIN)
@@ -529,22 +542,72 @@ def produce_photons(p1: "Particle", p2: "Particle") -> dict:
             "total_energy_mev":  ph1.energy_MeV + ph2.energy_MeV,
         }
 
-    # p+p̄ → hadronic cascade → ~4 photon equivalents, ~0.1 % to neutrinos
-    total_mev = 2.0 * PROTON_MASS_MEV * 0.999
-    phi_step  = math.pi / 2.0
-    theta_cm  = sample_klein_nishina_angle(total_mev)
+    # p+p̄ → π⁰π⁰ → 4γ  (simplified pedagogical model)
+    #
+    # Two π⁰ mesons share the total CM energy equally; each decays isotropically
+    # π⁰ → 2γ in its rest frame (each photon gets m_π/2 = 67.49 MeV).
+    # The pion is then boosted to the lab frame with lorentz_boost().
+    #
+    # π⁰ mass = 134.977 MeV/c²; proton mass = 938.272 MeV/c².
+    # At rest (v ≈ 0): total CM energy ≈ 2 × 938.272 MeV (ignoring KE).
+    # Each π⁰ carries E_pi = total_mev / 2 ≈ 938.272 MeV (highly boosted).
+    PI0_MASS_MEV: float = 134.977
+    total_mev = 2.0 * PROTON_MASS_MEV
+    E_pi = total_mev / 2.0          # energy of each π⁰ in lab frame
+    p_pi_mag = math.sqrt(max(E_pi * E_pi - PI0_MASS_MEV * PI0_MASS_MEV, 0.0))
+
+    vertex = [mid_x, mid_y, 0.0]
+    photons: list[dict] = []
+
+    for _ in range(2):
+        # Random pion direction (isotropic)
+        phi_pi  = random.uniform(0.0, 2.0 * math.pi)
+        cos_pi  = random.uniform(-1.0, 1.0)
+        sin_pi  = math.sqrt(max(1.0 - cos_pi * cos_pi, 0.0))
+        n_pi    = np.array([sin_pi * math.cos(phi_pi),
+                            sin_pi * math.sin(phi_pi),
+                            cos_pi])
+        # Pion 4-momentum and boost velocity
+        p4_pi   = np.array([E_pi, *(p_pi_mag * n_pi)])
+        beta_pi = p4_pi[1:] / E_pi   # β = p/E (natural units)
+
+        # Isotropic decay in pion rest frame: each photon gets m_π/2
+        E_ph_rf = PI0_MASS_MEV / 2.0
+        phi_dec = random.uniform(0.0, 2.0 * math.pi)
+        cos_dec = random.uniform(-1.0, 1.0)
+        sin_dec = math.sqrt(max(1.0 - cos_dec * cos_dec, 0.0))
+        n_dec   = np.array([sin_dec * math.cos(phi_dec),
+                            sin_dec * math.sin(phi_dec),
+                            cos_dec])
+
+        p1_rf = np.array([E_ph_rf, *(E_ph_rf * n_dec)])
+        p2_rf = np.array([E_ph_rf, *(E_ph_rf * (-n_dec))])
+
+        p1_lab = lorentz_boost(p1_rf, beta_pi)
+        p2_lab = lorentz_boost(p2_rf, beta_pi)
+
+        for p_lab in (p1_lab, p2_lab):
+            E_lab = float(p_lab[0])
+            p3    = p_lab[1:]
+            nm    = float(np.linalg.norm(p3))
+            dirv  = (p3 / nm).tolist() if nm > 1.0e-30 else n_dec.tolist()
+            photons.append(AnnihilationPhoton(
+                energy_MeV       = E_lab,
+                momentum_4vec    = p_lab.tolist(),
+                direction        = dirv,
+                polarization     = [0.0, 0.0, 0.0],   # not tracked for π⁰ decay
+                production_vertex= vertex,
+                theta_cm         = math.acos(float(np.clip(cos_dec, -1.0, 1.0))),
+                correlation_type = "pi0_decay",
+            ).to_dict())
+
+    avg_energy = sum(ph["energy_MeV"] for ph in photons) / 4.0
     return {
-        "process":           "p+p̄→πons→γ",
+        "process":           "p+p̄→π⁰π⁰→4γ",
         "position":          [mid_x, mid_y],
         "photon_count":      4,
-        "photons":           [
-            {
-                "energy_mev": total_mev / 4.0,
-                "theta":      theta_cm + i * phi_step,
-            }
-            for i in range(4)
-        ],
-        "photon_energy_mev": total_mev / 4.0,
+        "photons":           photons,
+        "photon_energy_mev": avg_energy,
         "total_energy_mev":  total_mev,
     }
 

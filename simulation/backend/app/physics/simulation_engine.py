@@ -148,7 +148,7 @@ class SimulationEngine:
             for ap in antimatter:
                 if ap.id in dead_a:
                     continue
-                if detect_annihilation(mp, ap, dt=dt):
+                if detect_annihilation(mp, ap, dt=dt, threshold=self._threshold):
                     dead_m.add(mp.id)
                     dead_a.add(ap.id)
                     products = produce_photons(mp, ap)
